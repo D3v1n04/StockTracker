@@ -1,10 +1,18 @@
+from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.analytics import get_stock_metrics, get_stock_analytics_series
+from backend.app.database import (
+    DatabaseConfigurationError,
+    check_database_connection,
+    reset_engine,
+)
 
 from backend.app.data_access import (
     get_all_symbols,
@@ -13,7 +21,18 @@ from backend.app.data_access import (
 )
 
 
-app = FastAPI(title="StockTracker API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        reset_engine()
+
+
+app = FastAPI(title="StockTracker API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +46,20 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check():
+    try:
+        check_database_connection()
+    except DatabaseConfigurationError as error:
+        logger.error("Database configuration error: %s", error)
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    except (OSError, SQLAlchemyError):
+        logger.warning("Database readiness check failed")
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    return {"status": "ready"}
 
 
 @app.get("/symbols")

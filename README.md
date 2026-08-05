@@ -117,6 +117,7 @@ SMA20, SMA50, and daily return values for each available date.
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Checks whether the API is running |
+| `GET` | `/ready` | Checks whether the configured database is reachable |
 | `GET` | `/symbols` | Lists symbols currently stored in SQLite |
 | `GET` | `/stocks/{symbol}` | Returns stored historical OHLCV data |
 | `GET` | `/latest/{symbol}` | Returns the latest stored OHLCV record |
@@ -141,10 +142,23 @@ On Windows, activate it with:
 ### 2. Install dependencies
 
 ```bash
-pip install fastapi uvicorn pandas yfinance
+pip install -r requirements.txt
 ```
 
-### 3. Download market data
+### 3. Provision the database schema
+
+```bash
+alembic upgrade head
+```
+
+Run migrations once as a deployment or release step before starting Uvicorn.
+Local development defaults to `sqlite:///data/market_data.db`. In production,
+set `APP_ENV=production` and provide `DATABASE_URL` before running migrations or
+starting the application. PostgreSQL connections default to a five-second
+connection timeout; set `DATABASE_CONNECT_TIMEOUT` to change it, or include
+`connect_timeout` directly in `DATABASE_URL`.
+
+### 4. Download market data
 
 From the project root, run:
 
@@ -152,10 +166,10 @@ From the project root, run:
 python backend/app/market_data.py
 ```
 
-This initializes `data/market_data.db` if needed and downloads one year of
-history for the symbols configured in `TRACKED_SYMBOLS`.
+This downloads one year of history for the symbols configured in
+`TRACKED_SYMBOLS` and saves it to the provisioned database.
 
-### 4. Start the API
+### 5. Start the API
 
 ```bash
 uvicorn backend.app.api:app --reload
@@ -164,7 +178,7 @@ uvicorn backend.app.api:app --reload
 The API is available at `http://127.0.0.1:8000`. FastAPI's interactive API
 documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 5. Start the frontend
+### 6. Start the frontend
 
 In a second terminal, serve the frontend on port 3000:
 

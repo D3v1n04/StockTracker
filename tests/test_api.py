@@ -1,11 +1,14 @@
-import sqlite3
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
-from backend.app import data_access
+from backend.app import database
+from backend.app import api as api_module
 from backend.app.api import app
+from backend.app.data_access import save_stock_history
 
 
 TEST_SYMBOL = "TEST"
@@ -14,40 +17,34 @@ TEST_SYMBOL = "TEST"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     database_path = tmp_path / "market_data.db"
-    monkeypatch.setattr(data_access, "DB_PATH", database_path)
-
-    connection = sqlite3.connect(database_path)
-    data_access.initialize_database(connection)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database_path}")
+    database.reset_engine()
+    database.initialize_database()
 
     start_date = date(2024, 1, 1)
     rows = []
     for index in range(60):
         close = 100.0 + index
         rows.append(
-            (
-                TEST_SYMBOL,
-                str(start_date + timedelta(days=index)),
-                close - 1.0,
-                close + 1.0,
-                close - 2.0,
-                close,
-                1_000 + index,
-            )
+            {
+                "Date": str(start_date + timedelta(days=index)),
+                "Open": close - 1.0,
+                "High": close + 1.0,
+                "Low": close - 2.0,
+                "Close": close,
+                "Volume": 1_000 + index,
+            }
         )
 
-    connection.executemany(
-        """
-        INSERT INTO price_history
-        (Symbol, Date, Open, High, Low, Close, Volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    connection.commit()
-    connection.close()
+    history = pd.DataFrame(rows)
+    save_stock_history(history, TEST_SYMBOL)
+    save_stock_history(history, TEST_SYMBOL)
 
-    with TestClient(app) as test_client:
-        yield test_client
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        database.reset_engine()
 
 
 def test_root_serves_dashboard(client):
@@ -63,6 +60,61 @@ def test_health(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_does_not_require_database(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    database.reset_engine()
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_startup_does_not_create_database_schema(tmp_path, monkeypatch):
+    database_path = tmp_path / "not-created.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database_path}")
+    database.reset_engine()
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert not database_path.exists()
+
+
+def test_ready(client):
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_ready_when_database_is_unavailable(client, monkeypatch):
+    def unavailable():
+        raise OperationalError("SELECT 1", {}, Exception("unavailable"))
+
+    monkeypatch.setattr(api_module, "check_database_connection", unavailable)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database unavailable"}
+
+
+def test_ready_when_production_database_url_is_missing(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    database.reset_engine()
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database unavailable"}
 
 
 def test_symbols(client):
