@@ -1,5 +1,3 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
-
 const stockSelect = document.getElementById("stockSelect");
 const stockTitle = document.getElementById("stockTitle");
 const latestPrice = document.getElementById("latestPrice");
@@ -53,6 +51,10 @@ function formatNumber(value) {
   return typeof value === "number" ? numberFormatter.format(value) : "--";
 }
 
+function formatDate(value) {
+  return typeof value === "string" ? value.split(/[ T]/)[0] : "--";
+}
+
 function resetDashboard(message) {
   stockTitle.textContent = message;
   latestPrice.textContent = "--";
@@ -73,7 +75,7 @@ async function loadSymbols() {
   setStatus("Loading available stocks...");
 
   try {
-    const data = await fetchJson(`${API_BASE_URL}/symbols`);
+    const data = await fetchJson("/symbols");
     const symbols = Array.isArray(data.symbols) ? data.symbols : [];
 
     stockSelect.innerHTML = "";
@@ -106,8 +108,8 @@ async function loadStock(symbol) {
 
   try {
     const [historyData, latestData] = await Promise.all([
-      fetchJson(`${API_BASE_URL}/stocks/${symbol}`),
-      fetchJson(`${API_BASE_URL}/latest/${symbol}`)
+      fetchJson(`/stocks/${symbol}`),
+      fetchJson(`/latest/${symbol}`)
     ]);
 
     if (latestData.error) {
@@ -136,7 +138,7 @@ function updateSummary(symbol, latestData) {
   metricFields.Low.textContent = formatCurrency(latestData.Low);
   metricFields.Close.textContent = formatCurrency(latestData.Close);
   metricFields.Volume.textContent = formatNumber(latestData.Volume);
-  metricFields.Date.textContent = latestData.Date || "--";
+  metricFields.Date.textContent = formatDate(latestData.Date);
 }
 
 function drawChart(symbol, prices) {
@@ -175,12 +177,18 @@ function drawChart(symbol, prices) {
         intersect: false,
         mode: "index"
       },
+      layout: {
+        padding: {
+          bottom: 8
+        }
+      },
       plugins: {
         legend: {
           display: false
         },
         tooltip: {
           callbacks: {
+            title: items => items.length > 0 ? `Date: ${formatDate(items[0].label)}` : "",
             label: context => `Close: ${formatCurrency(context.parsed.y)}`
           }
         }
@@ -191,8 +199,16 @@ function drawChart(symbol, prices) {
             display: false
           },
           ticks: {
-            maxTicksLimit: 8,
-            color: "#64748b"
+            autoSkip: true,
+            autoSkipPadding: 20,
+            color: "#64748b",
+            maxRotation: 45,
+            maxTicksLimit: 10,
+            minRotation: 0,
+            padding: 12,
+            callback(value) {
+              return formatDate(this.getLabelForValue(value));
+            }
           }
         },
         y: {
