@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+import json
 
 import pandas as pd
 import pytest
@@ -21,13 +21,14 @@ def client(tmp_path, monkeypatch):
     database.reset_engine()
     database.initialize_database()
 
-    start_date = date(2024, 1, 1)
     rows = []
-    for index in range(60):
+    for index, observation_date in enumerate(
+        pd.bdate_range("2024-01-02", periods=60)
+    ):
         close = 100.0 + index
         rows.append(
             {
-                "Date": str(start_date + timedelta(days=index)),
+                "Date": str(observation_date.date()),
                 "Open": close - 1.0,
                 "High": close + 1.0,
                 "Low": close - 2.0,
@@ -53,6 +54,28 @@ def test_root_serves_dashboard(client):
     assert response.status_code == 200
     assert "StockTracker Dashboard" in response.text
     assert response.headers["content-type"].startswith("text/html")
+
+
+def test_dashboard_includes_market_context_controls_and_responsive_assets(client):
+    dashboard = client.get("/")
+    script = client.get("/app.js")
+    stylesheet = client.get("/style.css")
+
+    assert dashboard.status_code == 200
+    assert 'id="contextSummary"' in dashboard.text
+    assert 'data-range="1M"' in dashboard.text
+    assert 'data-range="MAX"' in dashboard.text
+    assert 'data-sma="SMA200"' in dashboard.text
+    assert 'id="volumeChart"' in dashboard.text
+
+    assert script.status_code == 200
+    assert "fetchJson(`/analytics/${symbol}`)" in script.text
+    assert "fetchJson(`/analytics/${symbol}/series`)" in script.text
+    assert "http://localhost:8000" not in script.text
+
+    assert stylesheet.status_code == 200
+    assert "@media (max-width: 700px)" in stylesheet.text
+    assert "@media (max-width: 430px)" in stylesheet.text
 
 
 def test_health(client):
@@ -141,7 +164,7 @@ def test_latest_stock_information(client):
     assert response.status_code == 200
     assert response.json() == {
         "Symbol": TEST_SYMBOL,
-        "Date": "2024-02-29",
+        "Date": "2024-03-25",
         "Open": 158.0,
         "High": 160.0,
         "Low": 157.0,
@@ -156,11 +179,31 @@ def test_analytics_summary(client):
     assert response.status_code == 200
     body = response.json()
     assert body["symbol"] == TEST_SYMBOL
-    assert body["date"] == "2024-02-29"
+    assert body["date"] == "2024-03-25"
+    assert body["as_of_date"] == "2024-03-25"
+    assert body["latest_data_date"] == "2024-03-25"
+    assert body["latest_data_timestamp"] == "2024-03-25 00:00:00"
     assert body["latest_close"] == 159.0
     assert body["sma_20"] == pytest.approx(149.5)
     assert body["sma_50"] == pytest.approx(134.5)
+    assert body["sma_200"] is None
     assert body["daily_return_pct"] == pytest.approx((159.0 - 158.0) / 158.0 * 100)
+    assert body["return_1d_pct"] == body["daily_return_pct"]
+    assert body["return_1w_pct"] == pytest.approx((159.0 / 154.0 - 1) * 100)
+    assert body["return_1m_pct"] == pytest.approx((159.0 / 138.0 - 1) * 100)
+    assert body["return_3m_pct"] is None
+    assert body["return_ytd_pct"] is None
+    assert body["return_1y_pct"] is None
+    assert body["high_52w"] is None
+    assert body["low_52w"] is None
+    assert body["range_position_52w_pct"] is None
+    assert body["current_volume"] == 1_059
+    assert body["average_volume_20d"] == pytest.approx(1_048.5)
+    assert body["volume_vs_average_20d_pct"] == pytest.approx(
+        (1_059 / 1_048.5 - 1) * 100
+    )
+    assert body["annualized_volatility_30d_pct"] > 0
+    assert body["max_drawdown_1y_pct"] is None
     assert body["annualized_volatility_pct"] > 0
     assert body["data_points"] == 60
 
@@ -173,14 +216,100 @@ def test_analytics_series(client):
     assert body["symbol"] == TEST_SYMBOL
     assert body["count"] == 60
     assert body["data"][0] == {
-        "Date": "2024-01-01",
+        "Date": "2024-01-02",
         "Close": 100.0,
+        "Volume": 1_000.0,
         "SMA20": None,
         "SMA50": None,
+        "SMA200": None,
         "DailyReturnPct": None,
     }
     assert body["data"][-1]["SMA20"] == pytest.approx(149.5)
     assert body["data"][-1]["SMA50"] == pytest.approx(134.5)
+    assert body["data"][-1]["SMA200"] is None
+
+
+def test_endpoints_use_same_canonical_latest_finite_close(client):
+    with database.get_engine().begin() as connection:
+        connection.execute(
+            database.price_history.insert(),
+            [
+                {
+                    "Symbol": TEST_SYMBOL,
+                    "Date": "2024-03-26",
+                    "Open": 160.0,
+                    "High": 161.0,
+                    "Low": 159.0,
+                    "Close": None,
+                    "Volume": 2_000,
+                },
+                {
+                    "Symbol": TEST_SYMBOL,
+                    "Date": "2024-03-27",
+                    "Open": float("nan"),
+                    "High": float("inf"),
+                    "Low": float("-inf"),
+                    "Close": float("inf"),
+                    "Volume": 2_001,
+                },
+            ],
+        )
+
+    latest = client.get(f"/latest/{TEST_SYMBOL}")
+    summary = client.get(f"/analytics/{TEST_SYMBOL}")
+    series = client.get(f"/analytics/{TEST_SYMBOL}/series")
+    raw = client.get(f"/stocks/{TEST_SYMBOL}")
+
+    assert latest.status_code == 200
+    assert latest.json()["Date"] == "2024-03-25"
+    assert latest.json()["Close"] == 159.0
+    assert summary.json()["date"] == "2024-03-25"
+    assert summary.json()["as_of_date"] == "2024-03-25"
+    assert summary.json()["latest_close"] == 159.0
+    assert series.json()["as_of_date"] == "2024-03-25"
+    assert series.json()["data"][-1]["Date"] == "2024-03-25"
+    assert series.json()["count"] == 60
+
+    for response in (latest, summary, series, raw):
+        json.dumps(response.json(), allow_nan=False)
+    assert raw.json()["data"][-1]["Close"] is None
+    assert raw.json()["data"][-1]["Open"] is None
+    assert raw.json()["data"][-1]["High"] is None
+    assert raw.json()["data"][-1]["Low"] is None
+
+
+def test_nonfinite_latest_ohlcv_is_json_safe(client):
+    symbol = "SAFE"
+    with database.get_engine().begin() as connection:
+        connection.execute(
+            database.price_history.insert(),
+            {
+                "Symbol": symbol,
+                "Date": "2024-01-02",
+                "Open": float("nan"),
+                "High": float("inf"),
+                "Low": float("-inf"),
+                "Close": 100.0,
+                "Volume": float("inf"),
+            },
+        )
+
+    responses = [
+        client.get(f"/stocks/{symbol}"),
+        client.get(f"/latest/{symbol}"),
+        client.get(f"/analytics/{symbol}"),
+        client.get(f"/analytics/{symbol}/series"),
+    ]
+    for response in responses:
+        assert response.status_code == 200
+        json.dumps(response.json(), allow_nan=False)
+
+    latest = responses[1].json()
+    assert latest["Close"] == 100.0
+    assert latest["Open"] is None
+    assert latest["High"] is None
+    assert latest["Low"] is None
+    assert latest["Volume"] is None
 
 
 @pytest.mark.parametrize(

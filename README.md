@@ -13,8 +13,10 @@ information, and an interactive price history chart.
 - Provides a REST API built with FastAPI
 - Includes a responsive frontend dashboard
 - Supports interactive stock selection
-- Displays the latest open, high, low, close, volume, and date values
-- Charts historical closing prices with Chart.js
+- Displays the latest open, high, low, close, volume, and stored daily data date
+- Charts historical closing prices, moving averages, and volume with Chart.js
+- Filters the chart to 1M, 3M, 6M, YTD, 1Y, or the maximum stored range
+- Summarizes recent returns, trend, trading range, volume, volatility, and drawdown
 - Calculates stock metrics through a Pandas-based analytics engine
 
 ## Tech Stack
@@ -102,15 +104,43 @@ database for analytics requests. It obtains historical data through
 
 The currently implemented analytics are:
 
-- 20-day Simple Moving Average (SMA20)
-- 50-day Simple Moving Average (SMA50)
-- Daily percentage return
-- Annualized historical volatility, calculated from daily returns using 252
-  trading days
+| Metric | Definition |
+| --- | --- |
+| 1-day return | Percentage change over 1 trading session, requiring the latest 2 consecutive source observations. |
+| 1-week return | Percentage change over 5 trading sessions, requiring the latest 6 consecutive source observations. |
+| 1-month return | Percentage change over 21 trading sessions, requiring the latest 22 consecutive source observations. |
+| 3-month return | Percentage change over 63 trading sessions, requiring the latest 64 consecutive source observations. |
+| 1-year return | Percentage change over 252 trading sessions, requiring the latest 253 consecutive source observations. |
+| Year-to-date return | Percentage change from the final valid close before January 1 to the latest close. The anchor must be within seven calendar days of January 1, and every source observation through the latest date must have a valid close. |
+| 52-week high and low | Highest stored `High` and lowest stored `Low` in the most recent 252 covered trading-session rows. |
+| 52-week range position | `(latest close - 52-week low) / (52-week high - 52-week low) × 100`. A flat high/low range returns `null`. |
+| Current volume vs. 20-day average | Percentage difference between the latest volume and the mean volume of the prior 20 stored trading sessions. The current session is excluded from the average. |
+| SMA20, SMA50, and SMA200 | Arithmetic mean of the latest 20, 50, or 200 consecutive stored closing prices. |
+| 30-day annualized volatility | Sample standard deviation of the latest 30 daily close-to-close returns, multiplied by `√252` and expressed as a percentage. This requires 31 valid consecutive closes. |
+| 1-year maximum drawdown | Largest peak-to-trough decline in the most recent 252 covered trading-session rows, calculated as the minimum of `close / running peak - 1` and expressed as a percentage. |
 
-The analytics summary endpoint returns the latest SMA20, SMA50, daily return,
-and annualized volatility values. The analytics series endpoint returns close,
-SMA20, SMA50, and daily return values for each available date.
+Percentage return is calculated as `(latest close / comparison close - 1) ×
+100`. Session-return windows must end at the canonical latest finite close,
+contain exactly `N + 1` consecutive source observations, contain only finite
+closes, and have no observation gap greater than seven calendar days. The
+52-week and drawdown windows apply the same coverage rules to 252 rows. A zero
+comparison close, missing or non-finite observation, incomplete rolling window,
+or excessive gap returns `null` rather than a partial or placeholder metric.
+Flat prices correctly produce zero return, zero volatility, and zero drawdown.
+
+The canonical as-of row is the latest chronological row with a finite close.
+`GET /latest/{symbol}`, the analytics summary, and the analytics series all end
+on that row. Later rows with missing or non-finite closes are excluded from the
+dashboard series. Because Yahoo Finance supplies daily observations, the
+dashboard labels freshness as a date (`YYYY-MM-DD`) without implying an
+intraday time or timezone.
+
+For backward compatibility, the analytics summary still includes
+`daily_return_pct`, `sma_20`, `sma_50`, and the all-history
+`annualized_volatility_pct` field. The new period-return and market-context
+fields are added alongside them. The analytics series endpoint now returns
+close, volume, SMA20, SMA50, SMA200, and daily return values for each available
+date; unavailable rolling values are `null`.
 
 ## API Endpoints
 
@@ -169,25 +199,30 @@ python backend/app/market_data.py
 This downloads one year of history for the symbols configured in
 `TRACKED_SYMBOLS` and saves it to the provisioned database.
 
-### 5. Start the API
+### 5. Start the application
 
 ```bash
 uvicorn backend.app.api:app --reload
 ```
 
-The API is available at `http://127.0.0.1:8000`. FastAPI's interactive API
+Open the dashboard at `http://127.0.0.1:8000`. FastAPI's interactive API
 documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 6. Start the frontend
+## Tests
 
-In a second terminal, serve the frontend on port 3000:
+Run the backend and API tests with:
 
 ```bash
-python -m http.server 3000 --directory frontend
+python -m pytest -q
 ```
 
-Open `http://127.0.0.1:3000` in a browser. The API CORS configuration permits
-the frontend origins `http://127.0.0.1:3000` and `http://localhost:3000`.
+Run the Chromium dashboard tests with:
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:frontend
+```
 
 ## Future Roadmap
 
