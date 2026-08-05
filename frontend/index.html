@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StockTracker Dashboard</title>
+
+  <link rel="stylesheet" href="style.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <main class="container">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">Market snapshot</p>
+        <h1>StockTracker Dashboard</h1>
+      </div>
+
+      <section class="selector-card" aria-label="Stock selector">
+        <label for="stockSelect">Stock</label>
+        <select id="stockSelect"></select>
+      </section>
+    </header>
+
+    <p id="statusMessage" class="status" role="status" aria-live="polite"></p>
+
+    <section class="price-card">
+      <div>
+        <p class="eyebrow">Latest close</p>
+        <h2 id="stockTitle">Select a stock</h2>
+      </div>
+      <p id="latestPrice" class="latest-price">--</p>
+    </section>
+
+    <section class="metrics-grid" aria-label="Latest stock metrics">
+      <article class="metric-card">
+        <span>Open</span>
+        <strong id="openValue">--</strong>
+      </article>
+      <article class="metric-card">
+        <span>High</span>
+        <strong id="highValue">--</strong>
+      </article>
+      <article class="metric-card">
+        <span>Low</span>
+        <strong id="lowValue">--</strong>
+      </article>
+      <article class="metric-card">
+        <span>Close</span>
+        <strong id="closeValue">--</strong>
+      </article>
+      <article class="metric-card">
+        <span>Volume</span>
+        <strong id="volumeValue">--</strong>
+      </article>
+      <article class="metric-card">
+        <span>Date</span>
+        <strong id="dateValue">--</strong>
+      </article>
+    </section>
+
+    <section class="chart-card">
+      <div class="chart-header">
+        <div>
+          <p class="eyebrow">Close price history</p>
+          <h2 id="chartTitle">Price trend</h2>
+        </div>
+      </div>
+      <canvas id="stockChart"></canvas>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
