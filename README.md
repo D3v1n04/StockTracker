@@ -279,12 +279,3 @@ npm ci
 npx playwright install chromium
 npm run test:frontend
 ```
-
-## Future Roadmap
-
-- Relative Strength Index (RSI)
-- Moving Average Convergence Divergence (MACD)
-- Bollinger Bands
-- Portfolio tracking
-- Background data updates
-- C++ analytics engine integration
