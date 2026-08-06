@@ -72,18 +72,26 @@ history through `analytics.py` before returning calculated results.
 
 ```text
 StockTracker/
+├── alembic/                 # Versioned database schema migrations
 ├── backend/
 │   └── app/
 │       ├── analytics.py      # Analytics and time-series calculations
 │       ├── api.py            # FastAPI application and routes
-│       ├── data_access.py    # SQLite initialization, reads, and writes
+│       ├── data_access.py    # Shared database reads and writes
+│       ├── database.py       # SQLite/PostgreSQL configuration and schema
+│       ├── market_history.py # Canonical market-history preparation
 │       └── market_data.py    # Yahoo Finance data download workflow
 ├── data/
 │   └── market_data.db        # Local SQLite database
+├── docs/
+│   └── deployment.md         # Neon and Render deployment runbook
 ├── frontend/
 │   ├── app.js                # API calls and dashboard behavior
 │   ├── index.html            # Dashboard markup
 │   └── style.css             # Dashboard styles
+├── scripts/
+│   └── deployment_smoke.py   # Post-deployment HTTP verification
+├── render.yaml               # Render Blueprint
 └── README.md
 ```
 
@@ -175,6 +183,12 @@ On Windows, activate it with:
 pip install -r requirements.txt
 ```
 
+For local test development, install the production and Python test dependencies:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ### 3. Provision the database schema
 
 ```bash
@@ -207,6 +221,14 @@ uvicorn backend.app.api:app --reload
 
 Open the dashboard at `http://127.0.0.1:8000`. FastAPI's interactive API
 documentation is available at `http://127.0.0.1:8000/docs`.
+
+## Deployment
+
+The repository includes a Render Blueprint for one Python web service. Production
+uses a user-supplied PostgreSQL `DATABASE_URL`; the Blueprint does not provision
+SQLite storage or run migrations during application startup. See the
+[Neon and Render deployment checklist](docs/deployment.md) for the required
+one-time migration, secure environment setup, verification, and rollback notes.
 
 ## Tests
 
