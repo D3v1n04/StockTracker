@@ -22,8 +22,8 @@ function buildSeries(endDate = "2025-01-31", count = 300) {
 }
 
 
-async function mockDashboard(page) {
-  const dataBySymbol = {
+async function mockDashboard(page, options = {}) {
+  const dataBySymbol = options.dataBySymbol || {
     TEST: buildSeries(),
     NEXT: buildSeries("2025-02-28", 300)
   };
@@ -46,7 +46,7 @@ async function mockDashboard(page) {
 
   await page.route("**/symbols", route => route.fulfill({
     contentType: "application/json",
-    body: JSON.stringify({ symbols: ["TEST", "NEXT"] })
+      body: JSON.stringify({ symbols: Object.keys(dataBySymbol) })
   }));
   await page.route("**/analytics/*/series", route => {
     const symbol = route.request().url().split("/").at(-2);
@@ -90,7 +90,8 @@ async function mockDashboard(page) {
         average_volume_20d: latest.Volume - 20,
         volume_vs_average_20d_pct: 2.0,
         annualized_volatility_30d_pct: 12.0,
-        max_drawdown_1y_pct: -15.0
+        max_drawdown_1y_pct: -15.0,
+        ...(options.analyticsBySymbol?.[symbol] || {})
       })
     });
   });
@@ -110,6 +111,16 @@ async function mockDashboard(page) {
       })
     });
   });
+}
+
+
+async function configureDashboard(page, options) {
+  await page.unroute("https://cdn.jsdelivr.net/**");
+  await page.unroute("**/symbols");
+  await page.unroute("**/analytics/*/series");
+  await page.unroute("**/analytics/*");
+  await page.unroute("**/latest/*");
+  await mockDashboard(page, options);
 }
 
 
@@ -205,4 +216,219 @@ test("phone layout has no horizontal overflow", async ({ page }) => {
 
   expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
   expect(layout.offenders).toEqual([]);
+});
+
+
+test("desktop workspace separates statistics from the sticky visualization panel", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await expect(page.locator("#statusMessage")).toContainText("Showing latest stored data for TEST");
+
+  const layout = await page.evaluate(() => {
+    const box = selector => {
+      const rect = document.querySelector(selector).getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, width: rect.width };
+    };
+    return {
+      workspaceColumns: getComputedStyle(document.querySelector(".dashboard-workspace")).gridTemplateColumns.split(" ").length,
+      returnsColumns: getComputedStyle(document.querySelector(".context-metrics-grid")).gridTemplateColumns.split(" ").length,
+      metricsColumns: getComputedStyle(document.querySelector(".market-metrics-grid")).gridTemplateColumns.split(" ").length,
+      visualizationPosition: getComputedStyle(document.querySelector(".visualization-column")).position,
+      statistics: box(".statistics-column"),
+      visualization: box(".visualization-column"),
+      selector: box(".selector-card"),
+      chart: box(".chart-card"),
+      price: box(".price-card"),
+      chartHeight: document.querySelector(".price-chart-container").getBoundingClientRect().height,
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth
+    };
+  });
+
+  expect(layout.workspaceColumns).toBe(2);
+  expect(layout.returnsColumns).toBe(2);
+  expect(layout.metricsColumns).toBe(2);
+  expect(layout.statistics.width).toBeLessThan(layout.visualization.width);
+  expect(layout.selector.left).toBeGreaterThan(layout.price.right);
+  expect(layout.chart.left).toBeGreaterThan(layout.price.right);
+  expect(layout.selector.top).toBeLessThan(layout.chart.top);
+  expect(layout.visualizationPosition).toBe("sticky");
+  expect(layout.chartHeight).toBeGreaterThanOrEqual(400);
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  await page.screenshot({ path: "test-results/dashboard-desktop.png", fullPage: true });
+});
+
+
+test("single-column workspace preserves dashboard reading order on tablet and phone", async ({ page }) => {
+  const viewports = [
+    { name: "tablet", width: 768, height: 1024, returns: 2, metrics: 2, priceHeight: [280, 320] },
+    { name: "phone", width: 390, height: 844, returns: 1, metrics: 1, priceHeight: [240, 280] }
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expect(page.locator("#statusMessage")).toContainText("Showing latest stored data for TEST");
+
+    const layout = await page.evaluate(() => {
+      const columns = selector => getComputedStyle(document.querySelector(selector)).gridTemplateColumns.split(" ").length;
+      const chartHeight = document.querySelector(".price-chart-container").getBoundingClientRect().height;
+      const positions = [
+        ".selector-card",
+        ".price-card",
+        ".metrics-grid",
+        ".chart-card",
+        ".context-card",
+        '[aria-labelledby="returnsTitle"]',
+        '[aria-labelledby="marketMetricsTitle"]'
+      ].map(selector => document.querySelector(selector).getBoundingClientRect().top);
+      return {
+        returns: columns(".context-metrics-grid"),
+        metrics: columns(".market-metrics-grid"),
+        chartHeight,
+        positions,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth
+      };
+    });
+
+    expect(layout.returns).toBe(viewport.returns);
+    expect(layout.metrics).toBe(viewport.metrics);
+    expect(layout.chartHeight).toBeGreaterThanOrEqual(viewport.priceHeight[0]);
+    expect(layout.chartHeight).toBeLessThanOrEqual(viewport.priceHeight[1]);
+    expect(layout.positions.every((top, index) => index === 0 || top > layout.positions[index - 1])).toBe(true);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    await page.screenshot({ path: `test-results/dashboard-${viewport.name}.png`, fullPage: true });
+  }
+});
+
+
+test("headline price remains fully visible for large formatted values", async ({ page }) => {
+  const values = [
+    { value: 9.99, formatted: "$9.99" },
+    { value: 488.40, formatted: "$488.40" },
+    { value: 1234.56, formatted: "$1,234.56" },
+    { value: 99999.99, formatted: "$99,999.99" }
+  ];
+  const viewports = [
+    { name: "desktop", width: 1440, height: 1000 },
+    { name: "tablet", width: 768, height: 1024 },
+    { name: "phone", width: 390, height: 844 }
+  ];
+
+  for (const price of values) {
+    const series = buildSeries();
+    series[series.length - 2].Close = price.value - 1;
+    series[series.length - 1].Close = price.value;
+    await configureDashboard(page, {
+      dataBySymbol: { TEST: series },
+      analyticsBySymbol: { TEST: { latest_close: price.value } }
+    });
+
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      await expect(page.locator("#latestPrice")).toHaveText(price.formatted);
+
+      const layout = await page.evaluate(() => {
+        const card = document.querySelector(".price-card").getBoundingClientRect();
+        const price = document.querySelector("#latestPrice").getBoundingClientRect();
+        return {
+          card,
+          price,
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth
+        };
+      });
+
+      expect(layout.price.left).toBeGreaterThanOrEqual(layout.card.left);
+      expect(layout.price.right).toBeLessThanOrEqual(layout.card.right);
+      expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+
+      if (price.value === 1234.56 && viewport.name === "desktop") {
+        await page.screenshot({ path: "test-results/headline-price-desktop-1234.png", fullPage: true });
+      }
+    }
+  }
+});
+
+
+test("daily change, neutral chips, range bar, and SMA comparisons handle values and nulls", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#dailyChange")).toHaveText("+$1.00 · +0.50%");
+  await expect(page.locator("#dailyChange")).toHaveClass(/positive/);
+  await expect(page.locator("#contextChips")).toContainText("+2.00% this month");
+  await expect(page.locator("#contextChips")).toContainText("Above SMA 200");
+  await expect(page.locator("#rangeMarker")).toHaveAttribute("style", /left: 66\.67%/);
+  await expect(page.locator("#rangeDescription")).toContainText("Current position 66.67%");
+  await expect(page.locator("#sma20Relation")).toHaveText("Price above SMA");
+
+  const flatSeries = buildSeries();
+  flatSeries[flatSeries.length - 2].Close = 400;
+  flatSeries[flatSeries.length - 1].Close = 400;
+  await configureDashboard(page, {
+    dataBySymbol: { TEST: flatSeries },
+    analyticsBySymbol: {
+      TEST: {
+        latest_close: 400,
+        return_1d_pct: 0,
+        return_1m_pct: null,
+        range_position_52w_pct: null,
+        low_52w: null,
+        high_52w: null,
+        sma_20: 400,
+        sma_50: 400,
+        sma_200: null,
+        volume_vs_average_20d_pct: null
+      }
+    }
+  });
+  await page.goto("/");
+  await expect(page.locator("#dailyChange")).toHaveText("$0.00 · 0.00%");
+  await expect(page.locator("#dailyChange")).toHaveClass(/neutral/);
+  await expect(page.locator("#contextChips .context-chip")).toHaveCount(0);
+  await expect(page.locator(".range-position")).toHaveClass(/is-unavailable/);
+  await expect(page.locator("#rangeDescription")).toContainText("unavailable");
+  await expect(page.locator("#sma20Relation")).toHaveText("At SMA (within 0.1%)");
+});
+
+
+test("negative and unavailable daily changes remain explicit without color", async ({ page }) => {
+  const negativeSeries = buildSeries();
+  negativeSeries[negativeSeries.length - 2].Close = 402;
+  negativeSeries[negativeSeries.length - 1].Close = 400;
+  await configureDashboard(page, {
+    dataBySymbol: { TEST: negativeSeries },
+    analyticsBySymbol: { TEST: { latest_close: 400, return_1d_pct: -0.5 } }
+  });
+  await page.goto("/");
+  await expect(page.locator("#dailyChange")).toHaveText("−$2.00 · −0.50%");
+  await expect(page.locator("#dailyChange")).toHaveClass(/negative/);
+
+  await configureDashboard(page, {
+    dataBySymbol: { TEST: [negativeSeries.at(-1)] },
+    analyticsBySymbol: { TEST: { latest_close: 400, return_1d_pct: null } }
+  });
+  await page.goto("/");
+  await expect(page.locator("#dailyChange")).toHaveText("Daily change unavailable");
+});
+
+
+test("SMA chips retain keyboard checkbox semantics and chart lifecycle", async ({ page }) => {
+  await page.goto("/");
+  const sma200 = page.locator('[data-sma="SMA200"]');
+  await sma200.focus();
+  await page.keyboard.press("Space");
+  await expect(sma200).toBeChecked();
+  await expect(sma200.locator("xpath=..")).toHaveClass(/sma-chip/);
+  const state = await page.evaluate(() => ({
+    chartCount: window.__chartInstances.length,
+    previousChartsDestroyed: window.__chartInstances.slice(-4, -2).every(chart => chart.destroyed),
+    chartHeight: document.querySelector(".price-chart-container").getBoundingClientRect().height,
+    closeWidth: window.__chartInstances.at(-2).config.data.datasets[0].borderWidth
+  }));
+  expect(state.chartCount).toBe(4);
+  expect(state.previousChartsDestroyed).toBe(true);
+  expect(state.chartHeight).toBeGreaterThanOrEqual(320);
+  expect(state.closeWidth).toBe(3);
 });

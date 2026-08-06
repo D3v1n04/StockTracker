@@ -1,9 +1,11 @@
 const stockSelect = document.getElementById("stockSelect");
 const stockTitle = document.getElementById("stockTitle");
 const latestPrice = document.getElementById("latestPrice");
+const dailyChange = document.getElementById("dailyChange");
 const latestTimestamp = document.getElementById("latestTimestamp");
 const statusMessage = document.getElementById("statusMessage");
 const contextSummary = document.getElementById("contextSummary");
+const contextChips = document.getElementById("contextChips");
 const chartTitle = document.getElementById("chartTitle");
 const chartSubtitle = document.getElementById("chartSubtitle");
 const chartDescription = document.getElementById("chartDescription");
@@ -11,6 +13,7 @@ const chartCanvas = document.getElementById("stockChart");
 const volumeCanvas = document.getElementById("volumeChart");
 const rangeButtons = Array.from(document.querySelectorAll("[data-range]"));
 const smaToggles = Array.from(document.querySelectorAll("[data-sma]"));
+const SMA_RELATION_TOLERANCE_PCT = 0.1;
 
 const metricFields = {
   Open: document.getElementById("openValue"),
@@ -79,8 +82,28 @@ function formatPercentage(value, signed = true) {
   if (!Number.isFinite(value)) {
     return "—";
   }
-  const sign = signed && value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
+  const sign = value > 0 && signed ? "+" : value < 0 ? "−" : "";
+  return `${sign}${Math.abs(value).toFixed(2)}%`;
+}
+
+function formatSignedCurrency(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  return `${sign}${currencyFormatter.format(Math.abs(value))}`;
+}
+
+function valueState(value) {
+  if (!Number.isFinite(value) || value === 0) {
+    return "neutral";
+  }
+  return value > 0 ? "positive" : "negative";
+}
+
+function setMetricState(element, value) {
+  element.closest(".metric-card")?.classList.remove("positive", "negative", "neutral");
+  element.closest(".metric-card")?.classList.add(valueState(value));
 }
 
 function formatDate(value) {
@@ -101,10 +124,13 @@ function destroyCharts() {
 function resetDashboard(message) {
   stockTitle.textContent = message;
   latestPrice.textContent = "—";
+  dailyChange.textContent = "Daily change unavailable";
+  dailyChange.className = "daily-change neutral";
   latestTimestamp.textContent = "Latest daily data: —";
   chartTitle.textContent = "Price trend";
   chartSubtitle.textContent = "Closing price and selected moving averages";
   contextSummary.textContent = "Market context is unavailable for this symbol.";
+  contextChips.replaceChildren();
   chartDescription.textContent = "No chart data is available.";
   chartCanvas.setAttribute("aria-label", "Stock closing price and moving-average chart");
   volumeCanvas.setAttribute("aria-label", "Stock trading volume chart");
@@ -113,7 +139,15 @@ function resetDashboard(message) {
     element.textContent = "—";
   });
   document.getElementById("rangeValues").textContent = "Low — · High —";
+  document.getElementById("rangeLow").textContent = "Low —";
+  document.getElementById("rangeHigh").textContent = "High —";
+  document.getElementById("rangeDescription").textContent = "52-week range position unavailable.";
+  document.getElementById("rangeMarker").style.left = "";
+  document.querySelector(".range-position").classList.add("is-unavailable");
   document.getElementById("averageVolume").textContent = "Average —";
+  ["sma20Relation", "sma50Relation", "sma200Relation"].forEach(id => {
+    document.getElementById(id).textContent = "Comparison unavailable";
+  });
   currentSeries = [];
   destroyCharts();
 }
@@ -190,6 +224,30 @@ function updateLatestSummary(symbol, latestData, analyticsData) {
   metricFields.Close.textContent = formatCurrency(latestData.Close);
   metricFields.Volume.textContent = formatNumber(latestData.Volume);
   metricFields.Date.textContent = formatDate(latestData.Date);
+  updateDailyChange(latestData, analyticsData);
+}
+
+function updateDailyChange(latestData, metrics) {
+  const latestSeriesRow = currentSeries.at(-1);
+  const previousSeriesRow = currentSeries.at(-2);
+  const latestClose = latestSeriesRow?.Close;
+  const previousClose = previousSeriesRow?.Close;
+  const returnPct = metrics.return_1d_pct;
+
+  if (
+    !Number.isFinite(latestClose) ||
+    !Number.isFinite(previousClose) ||
+    !Number.isFinite(returnPct) ||
+    !Number.isFinite(latestData.Close)
+  ) {
+    dailyChange.textContent = "Daily change unavailable";
+    dailyChange.className = "daily-change neutral";
+    return;
+  }
+
+  const dollarChange = latestClose - previousClose;
+  dailyChange.textContent = `${formatSignedCurrency(dollarChange)} · ${formatPercentage(returnPct)}`;
+  dailyChange.className = `daily-change ${valueState(dollarChange)}`;
 }
 
 function updateMarketContext(symbol, metrics) {
@@ -201,35 +259,95 @@ function updateMarketContext(symbol, metrics) {
     } else {
       element.textContent = formatPercentage(metrics[key]);
     }
+    if (key.startsWith("return_")) {
+      setMetricState(element, metrics[key]);
+    }
   });
 
-  document.getElementById("rangeValues").textContent =
-    `Low ${formatCurrency(metrics.low_52w)} · High ${formatCurrency(metrics.high_52w)}`;
+  updateRangePosition(metrics);
   document.getElementById("averageVolume").textContent =
     `Current ${formatNumber(metrics.current_volume)} · Average ${formatNumber(metrics.average_volume_20d)}`;
+  updateSmaRelations(metrics);
+  updateContextChips(metrics);
 
   const observations = [];
-  if (Number.isFinite(metrics.return_1m_pct)) {
-    if (metrics.return_1m_pct === 0) {
-      observations.push(`${symbol} is unchanged over the past month.`);
-    } else {
-      const direction = metrics.return_1m_pct > 0 ? "up" : "down";
-      observations.push(`${symbol} is ${direction} ${Math.abs(metrics.return_1m_pct).toFixed(2)}% over the past month.`);
-    }
-  }
   if (Number.isFinite(metrics.sma_50) && metrics.sma_50 !== 0 && Number.isFinite(metrics.latest_close)) {
     const distance = (metrics.latest_close / metrics.sma_50 - 1) * 100;
     const relation = distance >= 0 ? "above" : "below";
     observations.push(`The latest close is ${Math.abs(distance).toFixed(2)}% ${relation} its 50-day average.`);
   }
-  if (Number.isFinite(metrics.volume_vs_average_20d_pct)) {
-    const relation = metrics.volume_vs_average_20d_pct >= 0 ? "above" : "below";
-    observations.push(`Latest volume is ${Math.abs(metrics.volume_vs_average_20d_pct).toFixed(1)}% ${relation} its prior 20-session average.`);
-  }
-
   contextSummary.textContent = observations.length > 0
     ? observations.join(" ")
-    : "There is not yet enough valid history to summarize recent price and volume context.";
+    : `There is not yet enough valid history to summarize ${symbol}'s trend context.`;
+}
+
+function updateRangePosition(metrics) {
+  const rangePosition = metrics.range_position_52w_pct;
+  const low = metrics.low_52w;
+  const high = metrics.high_52w;
+  const rangeContainer = document.querySelector(".range-position");
+  const rangeValues = document.getElementById("rangeValues");
+  const rangeDescription = document.getElementById("rangeDescription");
+  const marker = document.getElementById("rangeMarker");
+
+  document.getElementById("rangeLow").textContent = `Low ${formatCurrency(low)}`;
+  document.getElementById("rangeHigh").textContent = `High ${formatCurrency(high)}`;
+  if (!Number.isFinite(rangePosition) || !Number.isFinite(low) || !Number.isFinite(high)) {
+    rangeContainer.classList.add("is-unavailable");
+    rangeValues.textContent = "Current position unavailable";
+    rangeDescription.textContent = "52-week range position unavailable because valid range history is insufficient.";
+    marker.style.left = "";
+    return;
+  }
+
+  rangeContainer.classList.remove("is-unavailable");
+  marker.style.left = `${Math.min(100, Math.max(0, rangePosition))}%`;
+  rangeValues.textContent = `Current ${formatPercentage(rangePosition, false)}`;
+  rangeDescription.textContent = `52-week range from low ${formatCurrency(low)} to high ${formatCurrency(high)}. Current position ${formatPercentage(rangePosition, false)}.`;
+}
+
+function updateSmaRelations(metrics) {
+  const relations = [["sma_20", "sma20Relation"], ["sma_50", "sma50Relation"], ["sma_200", "sma200Relation"]];
+  relations.forEach(([metricKey, elementId]) => {
+    const sma = metrics[metricKey];
+    const element = document.getElementById(elementId);
+    if (!Number.isFinite(metrics.latest_close) || !Number.isFinite(sma) || sma === 0) {
+      element.textContent = "Comparison unavailable";
+      return;
+    }
+    const differencePct = (metrics.latest_close / sma - 1) * 100;
+    if (Math.abs(differencePct) <= SMA_RELATION_TOLERANCE_PCT) {
+      element.textContent = `At SMA (within ${SMA_RELATION_TOLERANCE_PCT}%)`;
+    } else {
+      element.textContent = `Price ${differencePct > 0 ? "above" : "below"} SMA`;
+    }
+  });
+}
+
+function updateContextChips(metrics) {
+  contextChips.replaceChildren();
+  const chips = [];
+  if (Number.isFinite(metrics.return_1m_pct)) {
+    chips.push({ text: `${formatPercentage(metrics.return_1m_pct)} this month`, state: valueState(metrics.return_1m_pct) });
+  }
+  if (Number.isFinite(metrics.latest_close) && Number.isFinite(metrics.sma_200) && metrics.sma_200 !== 0) {
+    const relation = metrics.latest_close / metrics.sma_200 - 1;
+    chips.push({ text: `${relation >= 0 ? "Above" : "Below"} SMA 200`, state: valueState(relation) });
+  }
+  if (Number.isFinite(metrics.volume_vs_average_20d_pct) && Math.abs(metrics.volume_vs_average_20d_pct) >= 10) {
+    const isLow = metrics.volume_vs_average_20d_pct < 0;
+    chips.push({
+      text: isLow ? "Low volume" : "Above-average volume",
+      state: isLow ? "negative" : "positive"
+    });
+  }
+
+  chips.slice(0, 3).forEach(chip => {
+    const element = document.createElement("span");
+    element.className = `context-chip ${chip.state}`;
+    element.textContent = chip.text;
+    contextChips.appendChild(element);
+  });
 }
 
 function parseSeriesDate(value) {
@@ -333,9 +451,11 @@ function drawCharts() {
           position: "top",
           align: "start",
           onClick: () => {},
-          labels: { color: "#475569", usePointStyle: true, boxWidth: 8, padding: 16 }
+          labels: { color: "#475569", usePointStyle: true, boxWidth: 9, padding: 16, font: { size: 13 } }
         },
         tooltip: {
+          titleFont: { size: 14 },
+          bodyFont: { size: 14 },
           callbacks: {
             title: items => items.length > 0 ? `Date: ${formatDate(items[0].label)}` : "",
             label: context => `${context.dataset.label}: ${formatCurrency(context.parsed.y)}`
@@ -349,6 +469,7 @@ function drawCharts() {
             autoSkip: true,
             autoSkipPadding: 18,
             color: "#64748b",
+            font: { size: 13 },
             maxRotation: 35,
             minRotation: 0,
             maxTicksLimit: maxTicks,
@@ -358,7 +479,7 @@ function drawCharts() {
         },
         y: {
           grid: { color: "#e2e8f0" },
-          ticks: { color: "#64748b", callback: value => formatCurrency(value) }
+          ticks: { color: "#64748b", font: { size: 13 }, callback: value => formatCurrency(value) }
         }
       }
     }
@@ -385,6 +506,8 @@ function drawCharts() {
       plugins: {
         legend: { display: false },
         tooltip: {
+          titleFont: { size: 14 },
+          bodyFont: { size: 14 },
           callbacks: {
             title: items => items.length > 0 ? `Date: ${formatDate(items[0].label)}` : "",
             label: context => `Volume: ${formatNumber(context.parsed.y)}`
@@ -398,6 +521,7 @@ function drawCharts() {
             autoSkip: true,
             autoSkipPadding: 18,
             color: "#64748b",
+            font: { size: 13 },
             maxRotation: 35,
             minRotation: 0,
             maxTicksLimit: maxTicks,
@@ -408,7 +532,7 @@ function drawCharts() {
         y: {
           beginAtZero: true,
           grid: { color: "#e2e8f0" },
-          ticks: { color: "#64748b", maxTicksLimit: 4, callback: value => numberFormatter.format(value) }
+          ticks: { color: "#64748b", font: { size: 13 }, maxTicksLimit: 4, callback: value => numberFormatter.format(value) }
         }
       }
     }

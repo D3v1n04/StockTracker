@@ -17,24 +17,25 @@
         <h1>StockTracker Dashboard</h1>
       </div>
 
-      <section class="selector-card" aria-label="Stock selector">
-        <label for="stockSelect">Stock</label>
-        <select id="stockSelect"></select>
-      </section>
     </header>
 
     <p id="statusMessage" class="status" role="status" aria-live="polite"></p>
 
-    <section class="price-card">
+    <div class="dashboard-workspace">
+      <div class="statistics-column">
+        <section class="price-card">
       <div>
         <p class="eyebrow">Latest close</p>
         <h2 id="stockTitle">Select a stock</h2>
         <p id="latestTimestamp" class="data-timestamp">Latest daily data: --</p>
       </div>
-      <p id="latestPrice" class="latest-price">--</p>
-    </section>
+      <div class="headline-price">
+        <p id="latestPrice" class="latest-price">--</p>
+        <p id="dailyChange" class="daily-change neutral" aria-live="polite">Daily change unavailable</p>
+      </div>
+        </section>
 
-    <section class="metrics-grid" aria-label="Latest stock metrics">
+        <section class="metrics-grid" aria-label="Latest stock metrics">
       <article class="metric-card">
         <span>Open</span>
         <strong id="openValue">--</strong>
@@ -59,17 +60,18 @@
         <span>Date</span>
         <strong id="dateValue">--</strong>
       </article>
-    </section>
+        </section>
 
-    <section class="context-card" aria-labelledby="contextTitle">
+        <section class="context-card" aria-labelledby="contextTitle">
       <p class="eyebrow">Market context</p>
       <h2 id="contextTitle">What’s happening?</h2>
       <p id="contextSummary" class="context-summary">
         Select a stock to see a neutral summary of its recent price and volume history.
       </p>
-    </section>
+      <div id="contextChips" class="context-chips" aria-label="Market context highlights"></div>
+        </section>
 
-    <section class="dashboard-section" aria-labelledby="returnsTitle">
+        <section class="dashboard-section" aria-labelledby="returnsTitle">
       <div class="section-heading">
         <div>
           <p class="eyebrow">Performance</p>
@@ -85,9 +87,9 @@
         <article class="metric-card"><span>Year to date</span><strong id="returnYtd">--</strong></article>
         <article class="metric-card"><span>1 Year</span><strong id="return1y">--</strong></article>
       </div>
-    </section>
+        </section>
 
-    <section class="dashboard-section" aria-labelledby="marketMetricsTitle">
+        <section class="dashboard-section" aria-labelledby="marketMetricsTitle">
       <div class="section-heading">
         <div>
           <p class="eyebrow">Trend and risk</p>
@@ -99,44 +101,59 @@
         <article class="metric-card detail-card">
           <span>52-week range position</span>
           <strong id="rangePosition">--</strong>
-          <small id="rangeValues">Low — · High —</small>
+          <div class="range-position" role="img" aria-label="52-week range position" aria-describedby="rangeDescription">
+            <div class="range-labels" aria-hidden="true">
+              <span id="rangeLow">Low —</span>
+              <span id="rangeHigh">High —</span>
+            </div>
+            <div class="range-track" aria-hidden="true"><span id="rangeMarker" class="range-marker"></span></div>
+            <small id="rangeValues">Current position unavailable</small>
+          </div>
+          <span id="rangeDescription" class="sr-only">52-week range position unavailable.</span>
         </article>
         <article class="metric-card detail-card">
           <span>Volume vs. 20-day average</span>
           <strong id="volumeComparison">--</strong>
           <small id="averageVolume">Average —</small>
         </article>
-        <article class="metric-card"><span>SMA 20</span><strong id="sma20Value">--</strong></article>
-        <article class="metric-card"><span>SMA 50</span><strong id="sma50Value">--</strong></article>
-        <article class="metric-card"><span>SMA 200</span><strong id="sma200Value">--</strong></article>
-        <article class="metric-card"><span>30-day volatility</span><strong id="volatility30">--</strong></article>
-        <article class="metric-card"><span>1-year max drawdown</span><strong id="maxDrawdown">--</strong></article>
+        <article class="metric-card"><span>SMA 20</span><strong id="sma20Value">--</strong><small id="sma20Relation">Comparison unavailable</small></article>
+        <article class="metric-card"><span>SMA 50</span><strong id="sma50Value">--</strong><small id="sma50Relation">Comparison unavailable</small></article>
+        <article class="metric-card"><span>SMA 200</span><strong id="sma200Value">--</strong><small id="sma200Relation">Comparison unavailable</small></article>
+        <article class="metric-card risk-card"><span>30-day volatility</span><strong id="volatility30">--</strong></article>
+        <article class="metric-card risk-card"><span>1-year max drawdown</span><strong id="maxDrawdown">--</strong></article>
       </div>
-    </section>
+        </section>
+      </div>
 
-    <section class="chart-card">
+      <div class="visualization-column">
+        <section class="selector-card" aria-label="Stock selector">
+          <label for="stockSelect">Stock</label>
+          <select id="stockSelect"></select>
+        </section>
+
+        <section class="chart-card">
       <div class="chart-header">
         <div>
           <p class="eyebrow">Close price history</p>
           <h2 id="chartTitle">Price trend</h2>
           <p id="chartSubtitle" class="chart-subtitle">Closing price and selected moving averages</p>
         </div>
-        <div class="chart-controls" aria-label="Chart controls">
-          <div class="range-controls" role="group" aria-label="Chart date range">
-            <button type="button" data-range="1M" aria-pressed="false">1M</button>
-            <button type="button" data-range="3M" aria-pressed="false">3M</button>
-            <button type="button" data-range="6M" aria-pressed="false">6M</button>
-            <button type="button" data-range="YTD" aria-pressed="false">YTD</button>
-            <button type="button" data-range="1Y" aria-pressed="true" class="active">1Y</button>
-            <button type="button" data-range="MAX" aria-pressed="false">MAX</button>
-          </div>
-          <fieldset class="sma-controls">
-            <legend>Moving average overlays</legend>
-            <label><input type="checkbox" data-sma="SMA20" checked /> SMA 20</label>
-            <label><input type="checkbox" data-sma="SMA50" checked /> SMA 50</label>
-            <label><input type="checkbox" data-sma="SMA200" /> SMA 200</label>
-          </fieldset>
+      </div>
+      <div class="chart-toolbar" aria-label="Chart controls">
+        <div class="range-controls" role="group" aria-label="Chart date range">
+          <button type="button" data-range="1M" aria-pressed="false">1M</button>
+          <button type="button" data-range="3M" aria-pressed="false">3M</button>
+          <button type="button" data-range="6M" aria-pressed="false">6M</button>
+          <button type="button" data-range="YTD" aria-pressed="false">YTD</button>
+          <button type="button" data-range="1Y" aria-pressed="true" class="active">1Y</button>
+          <button type="button" data-range="MAX" aria-pressed="false">MAX</button>
         </div>
+        <fieldset class="sma-controls">
+          <legend>Moving average overlays</legend>
+          <label class="sma-chip"><input type="checkbox" data-sma="SMA20" checked /> <span>SMA 20</span></label>
+          <label class="sma-chip"><input type="checkbox" data-sma="SMA50" checked /> <span>SMA 50</span></label>
+          <label class="sma-chip"><input type="checkbox" data-sma="SMA200" /> <span>SMA 200</span></label>
+        </fieldset>
       </div>
       <p id="chartDescription" class="sr-only" role="status" aria-live="polite"></p>
       <div class="price-chart-container">
@@ -159,7 +176,9 @@
           aria-describedby="chartDescription"
         >Trading-volume bars for the same dates shown in the price chart.</canvas>
       </div>
-    </section>
+        </section>
+      </div>
+    </div>
   </main>
 
   <script src="app.js"></script>
