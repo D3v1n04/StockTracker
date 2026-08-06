@@ -11,3 +11,9 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD_HASH
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

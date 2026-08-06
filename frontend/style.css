@@ -48,11 +48,36 @@ body {
 }
 
 .page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
 }
 
 .page-header > div {
   min-width: 0;
+}
+
+.page-header form {
+  flex: none;
+}
+
+.sign-out {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--muted);
+  background: var(--panel);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sign-out:hover,
+.sign-out:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .eyebrow {

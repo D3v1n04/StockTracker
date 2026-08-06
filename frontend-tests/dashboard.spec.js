@@ -126,6 +126,39 @@ async function configureDashboard(page, options) {
 
 test.beforeEach(async ({ page }) => {
   await mockDashboard(page);
+  await page.goto("/login");
+  await page.locator("#username").fill("test-user");
+  await page.locator("#password").fill("test-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+});
+
+
+test("authentication protects browser resources and supports login and logout", async ({ page }) => {
+  await page.context().clearCookies();
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+    "content",
+    "noindex, nofollow, noarchive"
+  );
+
+  await page.locator("#username").fill("test-user");
+  await page.locator("#password").fill("incorrect");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Invalid username or password.");
+
+  await page.locator("#username").fill("test-user");
+  await page.locator("#password").fill("test-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/app.js");
+  await expect(page).toHaveURL(/\/login$/);
 });
 
 

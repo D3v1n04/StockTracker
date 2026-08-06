@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+import hmac
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -18,6 +20,16 @@ from backend.app.data_access import (
     get_all_symbols,
     get_latest_price,
     get_stock_history,
+)
+from backend.app.auth import (
+    AuthenticationMiddleware,
+    clear_session_cookie,
+    client_key,
+    login_throttle,
+    read_credentials,
+    set_session_cookie,
+    valid_session,
+    verify_password,
 )
 
 
@@ -41,11 +53,65 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuthenticationMiddleware)
 
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+LOGIN_TEMPLATE = (FRONTEND_DIR / "login.html").read_text(encoding="utf-8")
+
+
+def login_page(message: str = "", status_code: int = 200) -> HTMLResponse:
+    message_html = f'<p class="error" role="alert">{message}</p>' if message else ""
+    return HTMLResponse(LOGIN_TEMPLATE.replace("{message}", message_html), status_code=status_code)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def show_login(request: Request):
+    config = request.state.auth_config
+    if valid_session(request.cookies.get("stocktracker_session"), config):
+        return RedirectResponse("/", status_code=303)
+    return login_page()
+
+
+@app.post("/login")
+async def log_in(request: Request):
+    config = request.state.auth_config
+    key = client_key(request)
+    retry_after = login_throttle.retry_after(key)
+    if retry_after:
+        response = login_page("Too many attempts. Please try again shortly.", 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+
+    credentials = await read_credentials(request)
+    if credentials is None:
+        login_throttle.fail(key)
+        return login_page("Invalid username or password.", 401)
+    username, password = credentials
+    username_matches = hmac.compare_digest(
+        username.encode("utf-8"), config.username.encode("utf-8")
+    )
+    password_matches = verify_password(password, config.password_hash)
+    if not (username_matches and password_matches):
+        login_throttle.fail(key)
+        return login_page("Invalid username or password.", 401)
+
+    login_throttle.clear(key)
+    response = RedirectResponse("/", status_code=303)
+    set_session_cookie(response, config)
+    return response
+
+
+@app.post("/logout")
+def log_out(request: Request):
+    response = RedirectResponse("/login", status_code=303)
+    clear_session_cookie(response, request.state.auth_config)
+    return response
 
 
 @app.get("/ready")
@@ -119,5 +185,4 @@ def read_stock_analytics_series(symbol: str):
     return series
 
 
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

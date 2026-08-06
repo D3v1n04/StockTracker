@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow, noarchive" />
   <title>StockTracker Dashboard</title>
 
   <link rel="stylesheet" href="style.css" />
@@ -16,7 +17,9 @@
         <p class="eyebrow">Market snapshot</p>
         <h1>StockTracker Dashboard</h1>
       </div>
-
+      <form method="post" action="/logout">
+        <button class="sign-out" type="submit">Sign out</button>
+      </form>
     </header>
 
     <p id="statusMessage" class="status" role="status" aria-live="polite"></p>

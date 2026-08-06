@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+from http.cookies import CookieError, SimpleCookie
+import getpass
 import json
+import os
 import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
@@ -108,7 +111,9 @@ def _content_type(response: Any) -> str:
     return headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
 
 
-def _get(base_url: str, path: str, timeout: float) -> tuple[str, str]:
+def _get(
+    base_url: str, path: str, timeout: float, session_cookie: str | None = None
+) -> tuple[str, str]:
     expected_origin = _origin(base_url)
     original_url = urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
     if _origin(original_url) != expected_origin:
@@ -119,10 +124,10 @@ def _get(base_url: str, path: str, timeout: float) -> tuple[str, str]:
     redirects = 0
 
     while True:
-        request = Request(
-            current_url,
-            headers={"User-Agent": "StockTracker-deployment-smoke/1.0"},
-        )
+        headers = {"User-Agent": "StockTracker-deployment-smoke/1.0"}
+        if session_cookie:
+            headers["Cookie"] = session_cookie
+        request = Request(current_url, headers=headers)
         try:
             with _open_request(request, timeout) as response:
                 status = response.status
@@ -164,8 +169,10 @@ def _get(base_url: str, path: str, timeout: float) -> tuple[str, str]:
     return content_type, body
 
 
-def _get_json(base_url: str, path: str, timeout: float) -> Any:
-    content_type, body = _get(base_url, path, timeout)
+def _get_json(
+    base_url: str, path: str, timeout: float, session_cookie: str | None = None
+) -> Any:
+    content_type, body = _get(base_url, path, timeout, session_cookie)
     if content_type != "application/json":
         raise SmokeCheckError(
             f"GET {path} returned {content_type!r}, expected application/json"
@@ -177,7 +184,52 @@ def _get_json(base_url: str, path: str, timeout: float) -> Any:
         raise SmokeCheckError(f"GET {path} returned invalid JSON: {error}") from error
 
 
-def run_checks(base_url: str, api_path: str, timeout: float) -> list[str]:
+def _login(base_url: str, username: str, password: str, timeout: float) -> str:
+    login_url = urljoin(f"{base_url.rstrip('/')}/", "login")
+    body = urlencode({"username": username, "password": password}).encode("ascii")
+    request = Request(
+        login_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "StockTracker-deployment-smoke/1.0",
+        },
+    )
+    try:
+        with _open_request(request, timeout) as response:
+            if response.status != 303 or response.headers.get("Location") != "/":
+                raise SmokeCheckError(
+                    f"POST {login_url} returned HTTP {response.status}, expected login redirect"
+                )
+            cookie_header = response.headers.get("Set-Cookie", "")
+    except HTTPError as error:
+        raise SmokeCheckError(
+            f"POST {login_url} returned HTTP {error.code}; authentication failed"
+        ) from error
+    except (TimeoutError, URLError) as error:
+        raise SmokeCheckError(f"POST {login_url} failed: {error}") from error
+
+    cookies = SimpleCookie()
+    try:
+        cookies.load(cookie_header)
+        session = cookies["stocktracker_session"]
+    except (CookieError, KeyError):
+        raise SmokeCheckError("login response did not set the session cookie") from None
+    if not session["httponly"] or session["samesite"].lower() != "lax":
+        raise SmokeCheckError("login response session cookie is missing required security attributes")
+    if _origin(base_url)[0] == "https" and not session["secure"]:
+        raise SmokeCheckError("HTTPS login response session cookie is missing Secure")
+    return f"stocktracker_session={session.value}"
+
+
+def run_checks(
+    base_url: str,
+    api_path: str,
+    timeout: float,
+    username: str,
+    password: str,
+) -> list[str]:
     try:
         _origin(base_url)
     except SmokeCheckError as error:
@@ -188,27 +240,30 @@ def run_checks(base_url: str, api_path: str, timeout: float) -> list[str]:
         raise SmokeCheckError("timeout must be greater than zero")
 
     checks: list[str] = []
-    content_type, body = _get(base_url, "/", timeout)
+    health = _get_json(base_url, "/health", timeout)
+    if not isinstance(health, dict) or health.get("status") != "ok":
+        raise SmokeCheckError("GET /health did not report status=ok")
+    checks.append("GET /health: public API process health available")
+
+    session_cookie = _login(base_url, username, password, timeout)
+    checks.append("POST /login: authenticated session established")
+
+    content_type, body = _get(base_url, "/", timeout, session_cookie)
     if content_type != HTML_CONTENT_TYPE or "StockTracker" not in body:
         raise SmokeCheckError("GET / did not return the StockTracker HTML dashboard")
     checks.append("GET /: dashboard HTML available")
 
-    health = _get_json(base_url, "/health", timeout)
-    if not isinstance(health, dict) or health.get("status") != "ok":
-        raise SmokeCheckError("GET /health did not report status=ok")
-    checks.append("GET /health: API process healthy")
-
-    ready = _get_json(base_url, "/ready", timeout)
+    ready = _get_json(base_url, "/ready", timeout, session_cookie)
     if not isinstance(ready, dict) or ready.get("status") != "ready":
         raise SmokeCheckError("GET /ready did not report status=ready")
     checks.append("GET /ready: database reachable")
 
-    css_content_type, _ = _get(base_url, "/style.css", timeout)
+    css_content_type, _ = _get(base_url, "/style.css", timeout, session_cookie)
     if css_content_type != CSS_CONTENT_TYPE:
         raise SmokeCheckError(
             f"GET /style.css returned {css_content_type!r}, expected text/css"
         )
-    javascript_content_type, _ = _get(base_url, "/app.js", timeout)
+    javascript_content_type, _ = _get(base_url, "/app.js", timeout, session_cookie)
     if javascript_content_type not in JAVASCRIPT_CONTENT_TYPES:
         raise SmokeCheckError(
             "GET /app.js returned "
@@ -216,7 +271,7 @@ def run_checks(base_url: str, api_path: str, timeout: float) -> list[str]:
         )
     checks.append("GET /style.css and /app.js: frontend assets available")
 
-    _get_json(base_url, api_path, timeout)
+    _get_json(base_url, api_path, timeout, session_cookie)
     checks.append(f"GET {api_path}: valid JSON response")
     return checks
 
@@ -230,13 +285,35 @@ def parse_args() -> argparse.Namespace:
         help="known JSON API path to verify (default: /symbols)",
     )
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds")
+    parser.add_argument(
+        "--username",
+        default=os.getenv("AUTH_USERNAME"),
+        help="login username (default: AUTH_USERNAME environment variable)",
+    )
+    parser.add_argument(
+        "--password-env",
+        metavar="NAME",
+        help="read the login password from environment variable NAME instead of prompting",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        checks = run_checks(args.base_url, args.api_path, args.timeout)
+        if not args.username:
+            raise SmokeCheckError("provide --username or set AUTH_USERNAME")
+        if args.password_env:
+            password = os.getenv(args.password_env)
+            if password is None:
+                raise SmokeCheckError(
+                    f"password environment variable {args.password_env!r} is not set"
+                )
+        else:
+            password = getpass.getpass("StockTracker password: ")
+        checks = run_checks(
+            args.base_url, args.api_path, args.timeout, args.username, password
+        )
     except SmokeCheckError as error:
         print(f"SMOKE CHECK FAILED: {error}", file=sys.stderr)
         return 1
