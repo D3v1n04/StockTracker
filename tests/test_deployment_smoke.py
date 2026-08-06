@@ -11,13 +11,22 @@ BASE_URL = "https://stocktracker.example"
 
 
 class FakeResponse:
-    def __init__(self, status, content_type="text/plain", body="", location=None):
+    def __init__(
+        self,
+        status,
+        content_type="text/plain",
+        body="",
+        location=None,
+        set_cookie=None,
+    ):
         self.status = status
         self._body = body.encode("utf-8")
         self.headers = Message()
         self.headers["Content-Type"] = content_type
         if location is not None:
             self.headers["Location"] = location
+        if set_cookie is not None:
+            self.headers["Set-Cookie"] = set_cookie
 
     def read(self):
         return self._body
@@ -46,6 +55,14 @@ def install_responses(monkeypatch, responses):
 
 def success_responses(base_url=BASE_URL):
     return {
+        f"{base_url}/login": FakeResponse(
+            303,
+            location="/",
+            set_cookie=(
+                "stocktracker_session=signed-value; Path=/; HttpOnly; "
+                "SameSite=Lax; Secure"
+            ),
+        ),
         f"{base_url}/": FakeResponse(
             200, "text/html; charset=utf-8", "<title>StockTracker Dashboard</title>"
         ),
@@ -68,9 +85,12 @@ def success_responses(base_url=BASE_URL):
 def test_smoke_checks_dashboard_assets_health_ready_and_empty_database_api(monkeypatch):
     requests = install_responses(monkeypatch, success_responses())
 
-    checks = deployment_smoke.run_checks(BASE_URL, "/symbols", 3.0)
+    checks = deployment_smoke.run_checks(
+        BASE_URL, "/symbols", 3.0, "test-user", "test-password"
+    )
 
-    assert len(checks) == 5
+    assert len(checks) == 6
+    assert checks[1] == "POST /login: authenticated session established"
     assert checks[-1] == "GET /symbols: valid JSON response"
     assert requests[-1] == f"{BASE_URL}/symbols"
 
@@ -177,7 +197,9 @@ def test_assets_accept_valid_media_types(monkeypatch, css_content_type, javascri
     )
     install_responses(monkeypatch, responses)
 
-    deployment_smoke.run_checks(BASE_URL, "/symbols", 3.0)
+    deployment_smoke.run_checks(
+        BASE_URL, "/symbols", 3.0, "test-user", "test-password"
+    )
 
 
 @pytest.mark.parametrize(
@@ -200,7 +222,9 @@ def test_assets_reject_login_pages_and_incorrect_media_types(
     install_responses(monkeypatch, responses)
 
     with pytest.raises(deployment_smoke.SmokeCheckError, match=asset_path):
-        deployment_smoke.run_checks(BASE_URL, "/symbols", 3.0)
+        deployment_smoke.run_checks(
+            BASE_URL, "/symbols", 3.0, "test-user", "test-password"
+        )
 
 
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
@@ -225,7 +249,12 @@ def test_http_localhost_base_url_is_supported(monkeypatch):
 
 
 def test_smoke_script_returns_nonzero_with_clear_failure(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["deployment_smoke.py", "not-a-url"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deployment_smoke.py", "not-a-url", "--username", "test-user"],
+    )
+    monkeypatch.setattr(deployment_smoke.getpass, "getpass", lambda _prompt: "unused")
 
     assert deployment_smoke.main() == 1
     assert "SMOKE CHECK FAILED" in capsys.readouterr().err

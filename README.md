@@ -18,6 +18,8 @@ information, and an interactive price history chart.
 - Filters the chart to 1M, 3M, 6M, YTD, 1Y, or the maximum stored range
 - Summarizes recent returns, trend, trading range, volume, volatility, and drawdown
 - Calculates stock metrics through a Pandas-based analytics engine
+- Protects the single-user dashboard, assets, API, readiness, and API docs with
+  a signed session cookie
 
 ## Tech Stack
 
@@ -88,9 +90,11 @@ StockTracker/
 ├── frontend/
 │   ├── app.js                # API calls and dashboard behavior
 │   ├── index.html            # Dashboard markup
+│   ├── login.html            # Public single-user login page
 │   └── style.css             # Dashboard styles
 ├── scripts/
-│   └── deployment_smoke.py   # Post-deployment HTTP verification
+│   ├── deployment_smoke.py   # Authenticated post-deployment verification
+│   └── generate_auth_secrets.py # Password hash/session secret generator
 ├── render.yaml               # Render Blueprint
 └── README.md
 ```
@@ -154,13 +158,21 @@ date; unavailable rolling values are `null`.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Checks whether the API is running |
+| `GET` | `/health` | Public check that the API process is running |
+| `GET`, `POST` | `/login` | Public login page and credential submission |
+| `POST` | `/logout` | Ends the authenticated session |
 | `GET` | `/ready` | Checks whether the configured database is reachable |
 | `GET` | `/symbols` | Lists symbols currently stored in SQLite |
 | `GET` | `/stocks/{symbol}` | Returns stored historical OHLCV data |
 | `GET` | `/latest/{symbol}` | Returns the latest stored OHLCV record |
 | `GET` | `/analytics/{symbol}` | Returns the latest computed analytics summary |
 | `GET` | `/analytics/{symbol}/series` | Returns the computed analytics time series |
+
+All routes except `/login` and `/health` require authentication, including the
+dashboard, frontend files, `/ready`, `/docs`, `/redoc`, and `/openapi.json`.
+Unauthenticated browser requests are redirected to the login page; API requests
+receive HTTP 401. Every response sends `X-Robots-Tag: noindex, nofollow,
+noarchive`, and both HTML pages contain an equivalent robots meta directive.
 
 ## Setup
 
@@ -202,7 +214,28 @@ starting the application. PostgreSQL connections default to a five-second
 connection timeout; set `DATABASE_CONNECT_TIMEOUT` to change it, or include
 `connect_timeout` directly in `DATABASE_URL`.
 
-### 4. Download market data
+### 4. Configure single-user authentication
+
+Choose `AUTH_USERNAME`, then generate a password hash and independent random
+session secret. The generator reads the password without echoing it and prints
+only derived/generated values:
+
+```bash
+python scripts/generate_auth_secrets.py
+```
+
+Set `AUTH_USERNAME`, the printed `AUTH_PASSWORD_HASH`, and the printed
+`SESSION_SECRET` in the process environment. Do not set `AUTH_PASSWORD_HASH` to
+the password itself, commit any secret, or put the plaintext password in an
+environment file. The password hash uses scrypt. Sessions are signed, expire
+after 12 hours, and use an HttpOnly, SameSite=Lax cookie; production cookies also
+use `Secure`. Login failures are throttled in-process with no external service.
+
+Production returns HTTP 503 for protected routes and `/login` if any required
+authentication setting is absent. `/health` remains available so the platform
+can distinguish a running but misconfigured service.
+
+### 5. Download market data
 
 From the project root, run:
 
@@ -213,14 +246,15 @@ python backend/app/market_data.py
 This downloads one year of history for the symbols configured in
 `TRACKED_SYMBOLS` and saves it to the provisioned database.
 
-### 5. Start the application
+### 6. Start the application
 
 ```bash
 uvicorn backend.app.api:app --reload
 ```
 
-Open the dashboard at `http://127.0.0.1:8000`. FastAPI's interactive API
-documentation is available at `http://127.0.0.1:8000/docs`.
+Open the dashboard at `http://127.0.0.1:8000` and sign in. FastAPI's interactive
+API documentation is available to the authenticated user at
+`http://127.0.0.1:8000/docs`.
 
 ## Deployment
 

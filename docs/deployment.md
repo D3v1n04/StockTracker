@@ -21,23 +21,55 @@ before the corresponding application version is deployed.
    Never save either connection string in this repository or a committed `.env`
    file.
 4. Create a Render Blueprint from this repository's `render.yaml`.
-5. When Render prompts for `DATABASE_URL`, securely provide the pooled Neon
-   connection string. `APP_ENV=production` is already declared by the Blueprint.
-6. Deploy the web service. Do not add Alembic to the build or Uvicorn start
-   command.
-7. Verify `/health`, `/ready`, the dashboard and its CSS/JavaScript assets, and
-   a JSON API route. The included checker performs these requests:
+5. Generate authentication values on a trusted machine. The command prompts for
+   the password twice without echoing it and never prints the plaintext:
 
    ```bash
-   python scripts/deployment_smoke.py https://<your-render-service-hostname>
+   python scripts/generate_auth_secrets.py
    ```
 
-8. Review the Render logs for configuration errors, database timeouts, and
+6. When Render prompts, securely provide:
+   - `DATABASE_URL`: the pooled Neon connection string;
+   - `AUTH_USERNAME`: the single permitted username;
+   - `AUTH_PASSWORD_HASH`: the generated scrypt hash (not the password);
+   - `SESSION_SECRET`: the independently generated secret.
+
+   `APP_ENV=production` is already declared by the Blueprint. Keep all values in
+   Render's secret environment settings; do not commit them or paste the
+   plaintext password into configuration. Rotating `SESSION_SECRET` immediately
+   invalidates every existing session. Rotating the hash changes the login
+   password.
+7. Deploy the web service. Do not add Alembic to the build or Uvicorn start
+   command.
+8. Verify the public health route, authenticated dashboard, protected readiness,
+   CSS/JavaScript assets, and a JSON API route. The checker prompts for the
+   password without echoing or logging it:
+
+   ```bash
+   AUTH_USERNAME="<username>" python scripts/deployment_smoke.py https://<your-render-service-hostname>
+   ```
+
+   For non-interactive CI, store the plaintext verification password only in the
+   CI secret manager and name that temporary environment variable explicitly:
+
+   ```bash
+   AUTH_USERNAME="<username>" python scripts/deployment_smoke.py \
+     https://<your-render-service-hostname> --password-env STOCKTRACKER_SMOKE_PASSWORD
+   ```
+
+   Never use `AUTH_PASSWORD_HASH` as the smoke-test password.
+9. Review the Render logs for configuration errors, database timeouts, and
    query failures.
 
 `/health` reports whether the API process is running and deliberately does not
 connect to the database. `/ready` runs a lightweight database query and returns
-HTTP 503 when the configured database cannot be reached.
+HTTP 503 when the configured database cannot be reached. Only `/health` and
+`/login` are public. The dashboard, frontend assets, data APIs, `/ready`, and
+FastAPI documentation/OpenAPI routes require a valid signed session. Missing
+authentication configuration fails closed with HTTP 503 in production while
+`/health` stays public. Production sessions are HttpOnly, SameSite=Lax, Secure,
+and expire after 12 hours. Repeated login failures are throttled in each web
+process without an external dependency.
 
 ## Future migrations and rollbacks
 
